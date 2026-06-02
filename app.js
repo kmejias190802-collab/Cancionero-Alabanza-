@@ -1,38 +1,68 @@
-/* ─── Storage keys ──────────────────────────────────────────── */
-const KEYS = { songs: 'alabanza_songs', cats: 'alabanza_cats' };
+/* ─── Firebase setup ────────────────────────────────────────── */
+import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js";
+import {
+  getFirestore, collection, doc,
+  onSnapshot, addDoc, setDoc, deleteDoc, query, orderBy
+} from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
+
+const firebaseConfig = {
+  apiKey: "AIzaSyAGFag-VIDz0VK7tzgAFXX7jtAr6cRGZ-4",
+  authDomain: "cancionero-alabanza.firebaseapp.com",
+  projectId: "cancionero-alabanza",
+  storageBucket: "cancionero-alabanza.firebasestorage.app",
+  messagingSenderId: "625391551661",
+  appId: "1:625391551661:web:91c7fc021f2f7eaf9ff224"
+};
+
+const fireApp = initializeApp(firebaseConfig);
+const db      = getFirestore(fireApp);
 
 /* ─── State ─────────────────────────────────────────────────── */
 let songs      = [];
 let categories = [];
 let activeTab  = 'all';
 let editId     = null;
-
-// Instrument sections state (while modal is open)
-// shape: { chords: [{id, name, content}], notes: [{id, name, content}] }
-let instState  = { chords: [], notes: [] };
+let instState     = { chords: [], notes: [] };
 let instActiveTab = { chords: null, notes: null };
-let pendingInstType = null; // 'chords' | 'notes'
+let pendingInstType = null;
 
-/* ─── Init ──────────────────────────────────────────────────── */
-function load() {
-  try { songs      = JSON.parse(localStorage.getItem(KEYS.songs)) || []; } catch { songs = []; }
-  try { categories = JSON.parse(localStorage.getItem(KEYS.cats))  || []; } catch { categories = []; }
-  if (!categories.length) {
-    categories = [
-      { id: 'ritmica',   name: 'Rítmica / Alabanza' },
-      { id: 'adoracion', name: 'Adoración' },
-    ];
-    persist('cats');
-  }
-}
+/* ─── Default categories (stored in Firestore) ──────────────── */
+const DEFAULT_CATS = [
+  { id: 'ritmica',   name: 'Rítmica / Alabanza' },
+  { id: 'adoracion', name: 'Adoración' },
+];
 
-function persist(which) {
-  if (!which || which === 'songs') localStorage.setItem(KEYS.songs, JSON.stringify(songs));
-  if (!which || which === 'cats')  localStorage.setItem(KEYS.cats,  JSON.stringify(categories));
+/* ─── Firestore listeners ───────────────────────────────────── */
+function initFirestore() {
+  // Listen to categories
+  onSnapshot(collection(db, 'categories'), snap => {
+    if (snap.empty) {
+      // First time: seed default categories
+      DEFAULT_CATS.forEach(c => setDoc(doc(db, 'categories', c.id), { name: c.name }));
+      return;
+    }
+    categories = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+    // Keep default order first
+    const order = ['ritmica', 'adoracion'];
+    categories.sort((a, b) => {
+      const ai = order.indexOf(a.id), bi = order.indexOf(b.id);
+      if (ai === -1 && bi === -1) return (a.name || '').localeCompare(b.name || '', 'es');
+      if (ai === -1) return 1;
+      if (bi === -1) return -1;
+      return ai - bi;
+    });
+    render();
+  });
+
+  // Listen to songs (newest first by createdAt)
+  const q = query(collection(db, 'songs'), orderBy('createdAt', 'desc'));
+  onSnapshot(q, snap => {
+    songs = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+    render();
+  });
 }
 
 /* ─── Helpers ───────────────────────────────────────────────── */
-function uid() { return Date.now().toString(36) + Math.random().toString(36).slice(2, 6); }
 function catById(id) { return categories.find(c => c.id === id) || { id, name: id }; }
 function badgeClass(catId) {
   if (catId === 'ritmica')   return 'ritmica';
@@ -43,7 +73,6 @@ function esc(str) {
   return String(str || '')
     .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 }
-
 function filteredSongs() {
   const q    = document.getElementById('search-input').value.toLowerCase().trim();
   const sort = document.getElementById('sort-select').value;
@@ -67,15 +96,14 @@ function renderTabs() {
   const container = document.getElementById('tabs-container');
   container.innerHTML = '';
 
-  const allBtn = makeTab('Todas', count('all'), activeTab === 'all', () => { activeTab = 'all'; render(); }, null);
-  container.appendChild(allBtn);
+  container.appendChild(makeTab('Todas', count('all'), activeTab === 'all',
+    () => { activeTab = 'all'; render(); }, null));
 
   categories.forEach(c => {
-    const btn = makeTab(c.name, count(c.id), activeTab === c.id,
+    container.appendChild(makeTab(c.name, count(c.id), activeTab === c.id,
       () => { activeTab = c.id; render(); },
       (e) => { e.stopPropagation(); deleteCategory(c.id, c.name); }
-    );
-    container.appendChild(btn);
+    ));
   });
 
   const addBtn = document.createElement('button');
@@ -89,15 +117,11 @@ function makeTab(name, count, isActive, onClick, onDelete) {
   const btn = document.createElement('button');
   btn.className = 'tab' + (isActive ? ' active' : '');
   btn.onclick = onClick;
-
-  const label = document.createTextNode(name + ' ');
-  btn.appendChild(label);
-
+  btn.appendChild(document.createTextNode(name + ' '));
   const badge = document.createElement('span');
   badge.className = 'count-badge';
   badge.textContent = count;
   btn.appendChild(badge);
-
   if (onDelete) {
     const del = document.createElement('span');
     del.className = 'del-cat';
@@ -137,72 +161,54 @@ function renderSongs() {
 
 function songCardHTML(s) {
   const cat = catById(s.category);
-
-  // Metadata row
   const meta = [
     s.key   ? `<div class="detail-item"><label>Tonalidad</label><span>${esc(s.key)}</span></div>` : '',
     s.bpm   ? `<div class="detail-item"><label>Tempo / BPM</label><span>${esc(s.bpm)}</span></div>` : '',
     s.meter ? `<div class="detail-item"><label>Compás</label><span>${esc(s.meter)}</span></div>` : '',
   ].filter(Boolean).join('');
 
-  // YouTube
   const ytBtn = s.youtube
     ? `<a class="yt-btn" href="${esc(s.youtube)}" target="_blank" rel="noopener">
         <i class="ti ti-brand-youtube"></i> Ver en YouTube
        </a>` : '';
 
-  // Letra
   const lyricsBlock = s.lyrics
-    ? `<div class="content-block">
-        <span class="content-block-label">Letra</span>
-        <div class="lyrics-text">${esc(s.lyrics)}</div>
-       </div>` : '';
+    ? `<div class="content-block"><span class="content-block-label">Letra</span>
+       <div class="lyrics-text">${esc(s.lyrics)}</div></div>` : '';
 
-  // Acordes generales
   const chordsBlock = s.chords
-    ? `<div class="content-block">
-        <span class="content-block-label">Acordes generales</span>
-        <div class="chords-text">${esc(s.chords)}</div>
-       </div>` : '';
+    ? `<div class="content-block"><span class="content-block-label">Acordes generales</span>
+       <div class="chords-text">${esc(s.chords)}</div></div>` : '';
 
-  // Acordes por instrumento
   const instChords = (s.instrumentChords || []).filter(i => i.content);
   const instChordsBlock = instChords.length
-    ? `<div class="content-block">
-        <span class="content-block-label">Acordes por instrumento</span>
+    ? `<div class="content-block"><span class="content-block-label">Acordes por instrumento</span>
         <div class="inner-tabs-wrap">
           <div class="inner-tabs-header">
-            ${instChords.map((i, idx) => `<button class="inner-tab${idx === 0 ? ' active' : ''}" onclick="switchInnerTab(this, 'ic-${s.id}', 'ic-${s.id}-${idx}')">${esc(i.name)}</button>`).join('')}
+            ${instChords.map((i, idx) => `<button class="inner-tab${idx===0?' active':''}" onclick="switchInnerTab(this,'ic-${s.id}-${idx}')">${esc(i.name)}</button>`).join('')}
           </div>
-          ${instChords.map((i, idx) => `<div class="inner-tab-panel${idx === 0 ? ' active' : ''}" id="ic-${s.id}-${idx}"><div class="chords-text">${esc(i.content)}</div></div>`).join('')}
-        </div>
-       </div>` : '';
+          ${instChords.map((i, idx) => `<div class="inner-tab-panel${idx===0?' active':''}" id="ic-${s.id}-${idx}"><div class="chords-text">${esc(i.content)}</div></div>`).join('')}
+        </div></div>` : '';
 
-  // Notas generales
   const notesBlock = s.notes
-    ? `<div class="content-block">
-        <span class="content-block-label">Notas generales</span>
-        <div class="chords-text" style="font-family:'DM Sans',sans-serif">${esc(s.notes)}</div>
-       </div>` : '';
+    ? `<div class="content-block"><span class="content-block-label">Notas generales</span>
+       <div class="chords-text" style="font-family:'DM Sans',sans-serif">${esc(s.notes)}</div></div>` : '';
 
-  // Notas por instrumento
   const instNotes = (s.instrumentNotes || []).filter(i => i.content);
   const instNotesBlock = instNotes.length
-    ? `<div class="content-block">
-        <span class="content-block-label">Notas por instrumento</span>
+    ? `<div class="content-block"><span class="content-block-label">Notas por instrumento</span>
         <div class="inner-tabs-wrap">
           <div class="inner-tabs-header">
-            ${instNotes.map((i, idx) => `<button class="inner-tab${idx === 0 ? ' active' : ''}" onclick="switchInnerTab(this, 'in-${s.id}', 'in-${s.id}-${idx}')">${esc(i.name)}</button>`).join('')}
+            ${instNotes.map((i, idx) => `<button class="inner-tab${idx===0?' active':''}" onclick="switchInnerTab(this,'in-${s.id}-${idx}')">${esc(i.name)}</button>`).join('')}
           </div>
-          ${instNotes.map((i, idx) => `<div class="inner-tab-panel${idx === 0 ? ' active' : ''}" id="in-${s.id}-${idx}"><div class="chords-text" style="font-family:'DM Sans',sans-serif">${esc(i.content)}</div></div>`).join('')}
-        </div>
-       </div>` : '';
+          ${instNotes.map((i, idx) => `<div class="inner-tab-panel${idx===0?' active':''}" id="in-${s.id}-${idx}"><div class="chords-text" style="font-family:'DM Sans',sans-serif">${esc(i.content)}</div></div>`).join('')}
+        </div></div>` : '';
 
-  const hasAnyDetail = meta || s.youtube || s.lyrics || s.chords || instChords.length || s.notes || instNotes.length;
+  const hasAny = meta || s.youtube || s.lyrics || s.chords || instChords.length || s.notes || instNotes.length;
 
   return `
 <div class="song-card" id="card-${s.id}" role="listitem">
-  <div class="song-header" onclick="toggleCard('${s.id}')" role="button" aria-expanded="false" aria-controls="body-${s.id}">
+  <div class="song-header" onclick="toggleCard('${s.id}')" role="button" aria-expanded="false">
     <div class="song-info">
       <div class="song-title">${esc(s.title)}</div>
       ${s.artist ? `<div class="song-artist">${esc(s.artist)}</div>` : ''}
@@ -212,38 +218,30 @@ function songCardHTML(s) {
   </div>
   <div class="song-body" id="body-${s.id}">
     ${meta ? `<div class="detail-grid">${meta}</div>` : ''}
-    ${ytBtn}
-    ${lyricsBlock}
-    ${chordsBlock}
-    ${instChordsBlock}
-    ${notesBlock}
-    ${instNotesBlock}
-    ${!hasAnyDetail ? '<p style="font-size:13px;color:var(--text-3);margin-bottom:12px">Sin detalles adicionales guardados.</p>' : ''}
+    ${ytBtn}${lyricsBlock}${chordsBlock}${instChordsBlock}${notesBlock}${instNotesBlock}
+    ${!hasAny ? '<p style="font-size:13px;color:var(--text-3);margin-bottom:12px">Sin detalles adicionales guardados.</p>' : ''}
     <div class="card-actions">
-      <button class="btn sm danger" onclick="deleteSong('${s.id}')"><i class="ti ti-trash" aria-hidden="true"></i> Eliminar</button>
-      <button class="btn sm" onclick="editSong('${s.id}')"><i class="ti ti-edit" aria-hidden="true"></i> Editar</button>
+      <button class="btn sm danger" onclick="deleteSong('${s.id}')"><i class="ti ti-trash"></i> Eliminar</button>
+      <button class="btn sm" onclick="editSong('${s.id}')"><i class="ti ti-edit"></i> Editar</button>
     </div>
   </div>
 </div>`;
 }
 
-function switchInnerTab(btn, groupId, panelId) {
+function switchInnerTab(btn, panelId) {
   const wrap = btn.closest('.inner-tabs-wrap');
   wrap.querySelectorAll('.inner-tab').forEach(t => t.classList.remove('active'));
   wrap.querySelectorAll('.inner-tab-panel').forEach(p => p.classList.remove('active'));
   btn.classList.add('active');
-  const panel = document.getElementById(panelId);
-  if (panel) panel.classList.add('active');
+  document.getElementById(panelId)?.classList.add('active');
 }
 
-/* ─── Card toggle ───────────────────────────────────────────── */
 function toggleCard(id) {
   const body = document.getElementById('body-' + id);
   const chev = document.getElementById('chev-' + id);
-  const header = body?.previousElementSibling;
   const isOpen = body.classList.toggle('open');
   chev.classList.toggle('open', isOpen);
-  if (header) header.setAttribute('aria-expanded', isOpen);
+  body.previousElementSibling?.setAttribute('aria-expanded', isOpen);
 }
 
 /* ─── Instrument tabs in modal ──────────────────────────────── */
@@ -257,7 +255,7 @@ function addInstrumentTab(type) {
 function confirmAddInstrument() {
   const name = document.getElementById('inst-name').value.trim();
   if (!name) { shake('inst-name'); return; }
-  const id = uid();
+  const id = Date.now().toString(36);
   instState[pendingInstType].push({ id, name, content: '' });
   instActiveTab[pendingInstType] = id;
   renderInstTabs(pendingInstType);
@@ -266,15 +264,13 @@ function confirmAddInstrument() {
 
 function removeInstrumentTab(type, id, e) {
   e.stopPropagation();
+  saveInstContent(type);
   instState[type] = instState[type].filter(i => i.id !== id);
-  if (instActiveTab[type] === id) {
-    instActiveTab[type] = instState[type].length ? instState[type][instState[type].length - 1].id : null;
-  }
+  instActiveTab[type] = instState[type].length ? instState[type][instState[type].length - 1].id : null;
   renderInstTabs(type);
 }
 
 function switchInstTab(type, id) {
-  // Save current textarea content before switching
   saveInstContent(type);
   instActiveTab[type] = id;
   renderInstTabs(type);
@@ -285,8 +281,7 @@ function saveInstContent(type) {
   if (!panels) return;
   const active = panels.querySelector('.inst-panel.active textarea');
   if (!active) return;
-  const activeId = instActiveTab[type];
-  const item = instState[type].find(i => i.id === activeId);
+  const item = instState[type].find(i => i.id === instActiveTab[type]);
   if (item) item.content = active.value;
 }
 
@@ -295,13 +290,11 @@ function renderInstTabs(type) {
   const panelsEl = document.getElementById('instrument-' + type + '-panels');
   const items    = instState[type];
   const activeId = instActiveTab[type];
-
   tabsEl.innerHTML = items.map(i => `
     <button class="inst-tab${i.id === activeId ? ' active' : ''}" onclick="switchInstTab('${type}','${i.id}')">
       ${esc(i.name)}
-      <span class="rm-inst" onclick="removeInstrumentTab('${type}','${i.id}',event)" title="Quitar"><i class="ti ti-x" style="font-size:10px"></i></span>
+      <span class="rm-inst" onclick="removeInstrumentTab('${type}','${i.id}',event)"><i class="ti ti-x" style="font-size:10px"></i></span>
     </button>`).join('');
-
   panelsEl.innerHTML = items.map(i => `
     <div class="inst-panel${i.id === activeId ? ' active' : ''}">
       <textarea rows="4" placeholder="Acordes / notas para ${esc(i.name)}...">${esc(i.content)}</textarea>
@@ -322,6 +315,7 @@ function openAddModal() {
   document.getElementById('song-modal').classList.add('open');
   setTimeout(() => document.getElementById('f-title').focus(), 50);
 }
+window.openAddModal = openAddModal;
 
 function editSong(id) {
   const s = songs.find(s => s.id === id);
@@ -338,18 +332,16 @@ function editSong(id) {
   document.getElementById('f-chords').value  = s.chords  || '';
   document.getElementById('f-notes').value   = s.notes   || '';
   fillCatSelect(s.category);
-
-  // Restore instrument tabs
   instState.chords = (s.instrumentChords || []).map(i => ({ ...i }));
   instState.notes  = (s.instrumentNotes  || []).map(i => ({ ...i }));
-  instActiveTab.chords = instState.chords.length ? instState.chords[0].id : null;
-  instActiveTab.notes  = instState.notes.length  ? instState.notes[0].id  : null;
+  instActiveTab.chords = instState.chords[0]?.id || null;
+  instActiveTab.notes  = instState.notes[0]?.id  || null;
   renderInstTabs('chords');
   renderInstTabs('notes');
-
   document.getElementById('song-modal').classList.add('open');
   setTimeout(() => document.getElementById('f-title').focus(), 50);
 }
+window.editSong = editSong;
 
 function clearForm() {
   ['f-title','f-artist','f-key','f-meter','f-bpm','f-youtube','f-lyrics','f-chords','f-notes']
@@ -367,9 +359,9 @@ function fillCatSelect(selected) {
   ).join('');
 }
 
-function saveSong() {
+async function saveSong() {
   const title = document.getElementById('f-title').value.trim();
-  if (!title) { document.getElementById('f-title').focus(); shake('f-title'); return; }
+  if (!title) { shake('f-title'); return; }
 
   const data = {
     title,
@@ -386,28 +378,36 @@ function saveSong() {
     instrumentNotes:  collectInstState('notes'),
   };
 
-  if (editId) {
-    const idx = songs.findIndex(s => s.id === editId);
-    if (idx !== -1) songs[idx] = { ...songs[idx], ...data };
-    toast('Canción actualizada');
-  } else {
-    songs.unshift({ id: uid(), createdAt: Date.now(), ...data });
-    toast('Canción agregada');
+  try {
+    if (editId) {
+      await setDoc(doc(db, 'songs', editId), { ...data, createdAt: songs.find(s => s.id === editId)?.createdAt || Date.now() });
+      toast('Canción actualizada');
+    } else {
+      await addDoc(collection(db, 'songs'), { ...data, createdAt: Date.now() });
+      toast('Canción agregada');
+    }
+    closeModal();
+  } catch(e) {
+    toast('Error al guardar. Revisá tu conexión.');
+    console.error(e);
   }
-  persist('songs');
-  closeModal();
-  render();
 }
+window.saveSong = saveSong;
 
-function deleteSong(id) {
+async function deleteSong(id) {
   if (!confirm('¿Eliminar esta canción? Esta acción no se puede deshacer.')) return;
-  songs = songs.filter(s => s.id !== id);
-  persist('songs');
-  render();
-  toast('Canción eliminada');
+  try {
+    await deleteDoc(doc(db, 'songs', id));
+    toast('Canción eliminada');
+  } catch(e) {
+    toast('Error al eliminar.');
+    console.error(e);
+  }
 }
+window.deleteSong = deleteSong;
 
 function closeModal() { document.getElementById('song-modal').classList.remove('open'); }
+window.closeModal = closeModal;
 
 /* ─── Category modal ────────────────────────────────────────── */
 function openCatModal() {
@@ -415,39 +415,56 @@ function openCatModal() {
   document.getElementById('cat-modal').classList.add('open');
   setTimeout(() => document.getElementById('cat-name').focus(), 50);
 }
-function closeCatModal() { document.getElementById('cat-modal').classList.remove('open'); }
+window.openCatModal = openCatModal;
 
-function saveCategory() {
+function closeCatModal() { document.getElementById('cat-modal').classList.remove('open'); }
+window.closeCatModal = closeCatModal;
+
+async function saveCategory() {
   const name = document.getElementById('cat-name').value.trim();
   if (!name) { shake('cat-name'); return; }
   const id = name.toLowerCase()
     .normalize('NFD').replace(/[\u0300-\u036f]/g, '')
-    .replace(/\s+/g, '-').replace(/[^a-z0-9-]/g, '') + '-' + uid();
-  categories.push({ id, name });
-  persist('cats');
-  activeTab = id;
-  closeCatModal();
-  render();
-  toast(`Categoría "${name}" creada`);
+    .replace(/\s+/g, '-').replace(/[^a-z0-9-]/g, '') + '-' + Date.now().toString(36);
+  try {
+    await setDoc(doc(db, 'categories', id), { name });
+    activeTab = id;
+    closeCatModal();
+    toast(`Categoría "${name}" creada`);
+  } catch(e) {
+    toast('Error al crear categoría.');
+    console.error(e);
+  }
 }
+window.saveCategory = saveCategory;
 
-function deleteCategory(id, name) {
+async function deleteCategory(id, name) {
   const songsInCat = songs.filter(s => s.category === id).length;
   const msg = songsInCat > 0
-    ? `¿Eliminar la categoría "${name}"? Tiene ${songsInCat} canción${songsInCat !== 1 ? 'es' : ''} que quedarán en "Todas" pero sin categoría asignada.`
+    ? `¿Eliminar la categoría "${name}"? Tiene ${songsInCat} canción${songsInCat !== 1 ? 'es' : ''} que quedarán sin categoría asignada.`
     : `¿Eliminar la categoría "${name}"?`;
   if (!confirm(msg)) return;
-  categories = categories.filter(c => c.id !== id);
-  persist('cats');
-  if (activeTab === id) activeTab = 'all';
-  render();
-  toast(`Categoría "${name}" eliminada`);
+  try {
+    await deleteDoc(doc(db, 'categories', id));
+    if (activeTab === id) activeTab = 'all';
+    toast(`Categoría "${name}" eliminada`);
+  } catch(e) {
+    toast('Error al eliminar categoría.');
+    console.error(e);
+  }
 }
 
 /* ─── Instrument modal ──────────────────────────────────────── */
 function closeInstModal() { document.getElementById('inst-modal').classList.remove('open'); }
+window.closeInstModal = closeInstModal;
+window.confirmAddInstrument = confirmAddInstrument;
+window.addInstrumentTab = addInstrumentTab;
+window.switchInstTab = switchInstTab;
+window.removeInstrumentTab = removeInstrumentTab;
+window.switchInnerTab = switchInnerTab;
+window.toggleCard = toggleCard;
 
-/* ─── Toast ─────────────────────────────────────────────────── */
+/* ─── Toast & shake ─────────────────────────────────────────── */
 let toastTimer = null;
 function toast(msg) {
   const el = document.getElementById('toast');
@@ -456,8 +473,6 @@ function toast(msg) {
   clearTimeout(toastTimer);
   toastTimer = setTimeout(() => el.classList.remove('show'), 2800);
 }
-
-/* ─── Shake ─────────────────────────────────────────────────── */
 function shake(inputId) {
   const el = document.getElementById(inputId);
   if (!el) return;
@@ -469,7 +484,7 @@ function shake(inputId) {
   setTimeout(() => { el.style.borderColor = ''; }, 1500);
 }
 
-/* ─── Keyboard shortcuts ────────────────────────────────────── */
+/* ─── Keyboard & backdrop ───────────────────────────────────── */
 document.addEventListener('keydown', e => {
   if (e.key === 'Escape') { closeModal(); closeCatModal(); closeInstModal(); }
   if ((e.ctrlKey || e.metaKey) && e.key === 'k') {
@@ -478,10 +493,8 @@ document.addEventListener('keydown', e => {
     document.getElementById('search-input').select();
   }
 });
-
-/* ─── Close modals on backdrop click ───────────────────────── */
 ['song-modal','cat-modal','inst-modal'].forEach(id => {
-  document.getElementById(id).addEventListener('click', function(e) {
+  document.getElementById(id)?.addEventListener('click', function(e) {
     if (e.target === this) {
       if (id === 'song-modal') closeModal();
       else if (id === 'cat-modal') closeCatModal();
@@ -489,11 +502,8 @@ document.addEventListener('keydown', e => {
     }
   });
 });
-
-/* ─── Live search & sort ────────────────────────────────────── */
 document.getElementById('search-input').addEventListener('input', render);
 document.getElementById('sort-select').addEventListener('change', render);
 
 /* ─── Boot ──────────────────────────────────────────────────── */
-load();
-render();
+initFirestore();
