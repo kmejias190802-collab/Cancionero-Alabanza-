@@ -1,0 +1,185 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Cancionero — Grupo de Alabanza</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Lora:ital,wght@0,400;0,500;1,400&family=DM+Sans:opsz,wght@9..40,300;9..40,400;9..40,500&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@tabler/icons-webfont@2.47.0/tabler-icons.min.css" />
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+
+  <header class="site-header">
+    <div class="header-inner">
+      <div>
+        <h1><i class="ti ti-music" aria-hidden="true"></i> Cancionero</h1>
+        <p class="header-sub">Grupo de alabanza</p>
+      </div>
+      <button class="btn primary" onclick="openAddModal()">
+        <i class="ti ti-plus" aria-hidden="true"></i> Agregar canción
+      </button>
+    </div>
+  </header>
+
+  <main class="app">
+    <div class="tabs-bar">
+      <div class="tabs" id="tabs-container"></div>
+    </div>
+
+    <div class="toolbar">
+      <div class="search-wrap">
+        <i class="ti ti-search" aria-hidden="true"></i>
+        <input type="text" id="search-input" placeholder="Buscar por título o artista..." />
+      </div>
+      <div class="sort-wrap">
+        <label for="sort-select">Ordenar:</label>
+        <select id="sort-select">
+          <option value="newest">Más reciente</option>
+          <option value="alpha">A → Z</option>
+        </select>
+      </div>
+    </div>
+
+    <div id="stats-bar" class="stats-bar"></div>
+    <div id="songs-list" role="list" aria-label="Lista de canciones"></div>
+  </main>
+
+  <!-- ── Modal: agregar / editar canción ── -->
+  <div class="modal-bg" id="song-modal" role="dialog" aria-modal="true" aria-labelledby="modal-heading">
+    <div class="modal">
+      <div class="modal-header">
+        <h2 id="modal-heading">Agregar canción</h2>
+        <button class="icon-btn" onclick="closeModal()" aria-label="Cerrar"><i class="ti ti-x"></i></button>
+      </div>
+
+      <div class="field">
+        <label for="f-title">Título <span class="required">*</span></label>
+        <input type="text" id="f-title" placeholder="Nombre de la canción" autocomplete="off" />
+        <span class="field-hint">Único campo obligatorio</span>
+      </div>
+
+      <div class="field">
+        <label for="f-category">Categoría</label>
+        <select id="f-category"></select>
+      </div>
+
+      <div class="field">
+        <label for="f-artist">Artista / intérprete original</label>
+        <input type="text" id="f-artist" placeholder="Ej: Elevation Worship, Marcos Witt..." autocomplete="off" />
+      </div>
+
+      <div class="field-row">
+        <div class="field">
+          <label for="f-key">Tonalidad</label>
+          <input type="text" id="f-key" placeholder="Ej: Do, Sol#, Rem" autocomplete="off" />
+        </div>
+        <div class="field">
+          <label for="f-meter">Compás</label>
+          <input type="text" id="f-meter" placeholder="Ej: 4/4, 3/4, 6/8" autocomplete="off" />
+        </div>
+      </div>
+
+      <div class="field">
+        <label for="f-bpm">Tempo / BPM</label>
+        <input type="text" id="f-bpm" placeholder="Ej: 120  ó  90 / 110 si hay dos opciones" autocomplete="off" />
+        <span class="field-hint">Podés usar / para indicar dos tempos posibles, ej: 90 / 110</span>
+      </div>
+
+      <div class="field">
+        <label for="f-youtube">Link de YouTube</label>
+        <input type="url" id="f-youtube" placeholder="https://youtube.com/watch?v=..." />
+        <span class="field-hint">Opcional — se puede agregar después</span>
+      </div>
+
+      <div class="field">
+        <label for="f-lyrics">Letra</label>
+        <textarea id="f-lyrics" placeholder="Pega aquí la letra de la canción..." rows="5"></textarea>
+      </div>
+
+      <div class="field">
+        <label for="f-chords">Acordes generales</label>
+        <textarea id="f-chords" placeholder="Ej: Intro: Do - Sol - La - Fa&#10;Verso: Do - Sol | Fa - Sol&#10;Coro: La - Fa - Do - Sol" rows="4"></textarea>
+      </div>
+
+      <!-- Acordes por instrumento -->
+      <div class="instrument-section">
+        <div class="instrument-section-header">
+          <span>Acordes por instrumento</span>
+          <button type="button" class="btn sm" onclick="addInstrumentTab('chords')">
+            <i class="ti ti-plus" aria-hidden="true"></i> Instrumento
+          </button>
+        </div>
+        <div id="instrument-chords-tabs" class="inst-tabs"></div>
+        <div id="instrument-chords-panels" class="inst-panels"></div>
+      </div>
+
+      <!-- Notas internas generales -->
+      <div class="field" style="margin-top:14px">
+        <label for="f-notes">Notas generales del grupo</label>
+        <textarea id="f-notes" placeholder="Instrucciones generales para todo el equipo..." rows="3"></textarea>
+      </div>
+
+      <!-- Notas por instrumento -->
+      <div class="instrument-section">
+        <div class="instrument-section-header">
+          <span>Notas por instrumento</span>
+          <button type="button" class="btn sm" onclick="addInstrumentTab('notes')">
+            <i class="ti ti-plus" aria-hidden="true"></i> Instrumento
+          </button>
+        </div>
+        <div id="instrument-notes-tabs" class="inst-tabs"></div>
+        <div id="instrument-notes-panels" class="inst-panels"></div>
+      </div>
+
+      <div class="modal-footer">
+        <button class="btn" onclick="closeModal()">Cancelar</button>
+        <button class="btn primary" onclick="saveSong()">
+          <i class="ti ti-device-floppy" aria-hidden="true"></i> Guardar
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── Modal: nueva categoría ── -->
+  <div class="modal-bg" id="cat-modal" role="dialog" aria-modal="true" aria-labelledby="cat-heading">
+    <div class="modal modal-sm">
+      <div class="modal-header">
+        <h2 id="cat-heading">Nueva categoría</h2>
+        <button class="icon-btn" onclick="closeCatModal()" aria-label="Cerrar"><i class="ti ti-x"></i></button>
+      </div>
+      <div class="field">
+        <label for="cat-name">Nombre <span class="required">*</span></label>
+        <input type="text" id="cat-name" placeholder="Ej: Himnos, Navidad, Ofertorio..." autocomplete="off" />
+      </div>
+      <div class="modal-footer">
+        <button class="btn" onclick="closeCatModal()">Cancelar</button>
+        <button class="btn primary" onclick="saveCategory()">Crear categoría</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── Modal: nuevo instrumento ── -->
+  <div class="modal-bg" id="inst-modal" role="dialog" aria-modal="true" aria-labelledby="inst-heading">
+    <div class="modal modal-sm">
+      <div class="modal-header">
+        <h2 id="inst-heading">Agregar instrumento</h2>
+        <button class="icon-btn" onclick="closeInstModal()" aria-label="Cerrar"><i class="ti ti-x"></i></button>
+      </div>
+      <div class="field">
+        <label for="inst-name">Instrumento <span class="required">*</span></label>
+        <input type="text" id="inst-name" placeholder="Ej: Bajo, Piano, Guitarra, Batería..." autocomplete="off" />
+      </div>
+      <div class="modal-footer">
+        <button class="btn" onclick="closeInstModal()">Cancelar</button>
+        <button class="btn primary" onclick="confirmAddInstrument()">Agregar</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="toast" class="toast" role="status" aria-live="polite"></div>
+  <script src="app.js"></script>
+</body>
+</html>
